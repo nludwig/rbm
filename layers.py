@@ -33,7 +33,7 @@ class RestrictedBoltzmannMachine:
 
     def initializeVisibleBias(self, visibleProportionOn=None):
         if visibleProportionOn is None:
-            self.visibleBias = np.zeros(len(self.hiddenLayer))
+            self.visibleBias = np.zeros(self.hiddenLayer.shape[-1])
         else:
             visibleProportionOn[np.isclose(visibleProportionOn, 0.)] = 0.01
             #visibleProportionOn[np.isclose(visibleProportionOn, 1.)] = 0.99
@@ -41,23 +41,22 @@ class RestrictedBoltzmannMachine:
             self.visibleBias = 1. / visibleProportionOn
 
     def initializeHiddenBias(self):
-        self.hiddenBias = np.zeros(len(self.hiddenLayer))
+        self.hiddenBias = np.zeros(self.hiddenLayer.shape[-1])
 
     def initializeWeights(self, sigma=0.01):
-        self.weights = self.rng.normal(scale=sigma, size=(len(self.visibleLayer), len(self.hiddenLayer)))
+        self.weights = self.rng.normal(scale=sigma, size=(self.visibleLayer.shape[-1], self.hiddenLayer.shape[-1]))
 
     def loadParameterFile(self, parameterFile):
         #assert type(parameterFile) == file
         fileContents = [float(line.strip()) for line in parameterFile]
-        visibleSlice = slice(0, len(self.visibleLayer))
-        hiddenSlice = slice(len(self.visibleLayer),
-                            len(self.visibleLayer)+len(self.hiddenLayer))
-        weightsSlice = slice(len(self.visibleLayer)+len(self.hiddenLayer),
-                             len(self.visibleLayer)+len(self.hiddenLayer)
-                             +len(self.visibleLayer)*len(self.hiddenLayer))
+        lv = self.visibleLayer.shape[-1]
+        lh = self.hiddenLayer.shape[-1]
+        visibleSlice = slice(0, lv)
+        hiddenSlice = slice(lv, lv+lh)
+        weightsSlice = slice(lv+lh,lv+lh+lv*lh)
         self.visibleBias = np.array(fileContents[visibleSlice])
         self.hiddenBias = np.array(fileContents[hiddenSlice])
-        self.weights = np.array(fileContents[weightsSlice]).reshape((len(self.visibleLayer), len(self.hiddenLayer)))
+        self.weights = np.array(fileContents[weightsSlice]).reshape((lv, lh))
 
     def dumpParameterFile(self, parameterFile):
         #assert type(parameterFile) == file
@@ -80,14 +79,13 @@ class RestrictedBoltzmannMachine:
 
     def visibleConditionalProbabilities(self):
         #compute unit energies and activation probabilities
-        conditionalEnergies = -(self.visibleBias + self.weights@self.hiddenLayer)
+        conditionalEnergies = -(self.visibleBias + self.hiddenLayer@self.weights.T)
         return logistic(self.beta * conditionalEnergies)
 
     def rollBernoulliProbabilities(self, probabilities):
         rolls = self.rng.uniform(size=probabilities.shape)
         return (rolls < probabilities).astype(np.float_)
 
-    #todo: vectorize for better speed with minibatches
     def gibbsSample(self, visibleData=None, hiddenUnitsStochastic=False):
         #load visibleDate; else use current values
         if visibleData is not None:
@@ -108,7 +106,6 @@ class RestrictedBoltzmannMachine:
     #training methods
     #
 
-    #todo: vectorize for better speed with minibatches
     def computePCDGradient(self, miniBatch, miniFantasyBatch, nCDSteps=1, l2Coefficient=0.):
         #compute "positive"/data mean
         visibleDataMean, hiddenDataMean, weightDataMean, _ = \
@@ -116,7 +113,7 @@ class RestrictedBoltzmannMachine:
 
         #compute "negative"/model mean
         visibleModelMean, hiddenModelMean, weightModelMean, newFantasy = \
-            self.computePCDGradientHalves(miniFantasyBatch, False, nCDSteps=nCDSteps, saveVisible=True)
+            self.computePCDGradientHalves(miniFantasyBatch, False, nCDSteps=nCDSteps)
 
         #compute gradients & return
         visibleGradient = visibleDataMean - visibleModelMean
@@ -124,25 +121,18 @@ class RestrictedBoltzmannMachine:
         weightGradient = weightDataMean - weightModelMean - l2Coefficient * self.weights
         return visibleGradient, hiddenGradient, weightGradient, newFantasy
 
-    #todo: vectorize for better speed with minibatches
-    def computePCDGradientHalves(self, miniBatch, hiddenUnitsStochastic, nCDSteps=1, saveVisible=False, clamp=False):
-        visibleMean = np.zeros(len(self.visibleLayer))
-        hiddenMean = np.zeros(len(self.hiddenLayer))
-        newVisible = np.zeros_like(miniBatch) if saveVisible is True else None
-        for i, observation in enumerate(miniBatch):
-            visibleIn = np.copy(observation)
-            for _ in range(nCDSteps):
-                visibleOut, hiddenOut = \
-                    self.gibbsSample(visibleData=visibleIn, hiddenUnitsStochastic=hiddenUnitsStochastic)
-                visibleIn = None #if nCDSteps > 1, use visibleData as found in previous step
-            visibleMean += observation if clamp is True else visibleOut
-            hiddenMean += hiddenOut
-            if saveVisible is True:
-                newVisible[i] = visibleOut
-        visibleMean /= miniBatch.shape[0]
-        hiddenMean /= miniBatch.shape[0]
-        weightMean = visibleMean[:, None] * hiddenMean[None, :]
-        return visibleMean, hiddenMean, weightMean, newVisible
+    def computePCDGradientHalves(self, miniBatch, hiddenUnitsStochastic, nCDSteps=1, clamp=False):
+        visibleIn = np.copy(miniBatch)
+        for _ in range(nCDSteps):
+            visibleOut, hiddenOut = self.gibbsSample(visibleData=visibleIn,
+                                        hiddenUnitsStochastic=hiddenUnitsStochastic)
+                
+            visibleIn = None #if nCDSteps > 1, use visibleData as found in previous step
+
+        visibleMean = miniBatch.mean(axis=0) if clamp is True else visibleOut.mean(axis=0)
+        hiddenMean = hiddenOut.mean(axis=0)
+        weightMean = visibleMean[..., :, None] * hiddenMean[..., None, :]
+        return visibleMean, hiddenMean, weightMean, visibleOut
 
     def sgd(self, visibleGradient, hiddenGradient, weightGradient, learningRate):
         self.visibleBias -= learningRate * visibleGradient
@@ -183,15 +173,13 @@ class RestrictedBoltzmannMachine:
         return newFantasy
 
     def computeReconstructionError(self, miniBatch, nCDSteps=1):
-        meanSquaredError = 0.
-        for i, observation in enumerate(miniBatch):
-            visibleIn = np.copy(observation)
-            for _ in range(nCDSteps):
-                visibleOut, _ = self.gibbsSample(visibleData=visibleIn)
-                visibleIn = None #if nCDSteps > 1, use visibleData as found in previous step
-            #visibleData = self.rollBernoulliProbabilities(visibleData)
-            sampleError = observation - visibleOut
-            meanSquaredError += (sampleError * sampleError).mean()
+        visibleIn = np.copy(miniBatch)
+        for _ in range(nCDSteps):
+            visibleOut, hiddenOut = self.gibbsSample(visibleData=visibleIn)
+            visibleIn = None #if nCDSteps > 1, use visibleData as found in previous step
+        #visibleOut = self.rollBernoulliProbabilities(visibleOut)
+        sampleError = miniBatch - visibleOut
+        meanSquaredError = (sampleError * sampleError).mean()
         return meanSquaredError
 
 
@@ -203,7 +191,7 @@ class RestrictedBoltzmannMachine:
         self.rng.seed(rngSeed)
 
     def __len__(self):
-        return len(self.visibleLayer), len(self.hiddenLayer)
+        return self.visibleLayer.shape[-1], self.hiddenLayer.shape[-1]
 
 def logistic(x):
     return 1. / (1. + np.exp(-x))

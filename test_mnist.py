@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from matplotlib import pyplot as plt
 from numpy.random import RandomState
@@ -49,11 +50,14 @@ def plotMNIST(image):
     plt.imshow(image.reshape(28, 28), cmap='gray')
     plt.show()
 
-def plotMNISTSeries(images):
+def plotMNISTSeries(images, fileName=None):
     fig, axs = plt.subplots(1, len(images))
     for i, ax in enumerate(axs):
         ax.imshow(images[i].reshape(28, 28), cmap='gray')
-    plt.show()
+    if fileName is None:
+        plt.show()
+    else:
+        plt.savefig(fileName)
 
 def main():
     #load data
@@ -71,13 +75,15 @@ def main():
     sigma = 2. / np.sqrt(numberVisibleUnits + numberHiddenUnits)
     iterations, miniBatchSize, learningRate = 100, 100, 0.001
     internalRngSeed, externalRngSeed = 1337, 1234
-    plotStartIndex, plotNumber, plotSkip = 100, 5, 100
+    plotStartIndex, plotNumber, plotSkip = 100, 5, 1
     trainingOutputSkip = 10
     l2Coefficient = 1e-4
     #parameterFileNameIn, parameterFileNameOut = 'parameterFile.txt', 'parameterFile.txt'
-    parameterFileNameIn, parameterFileNameOut = None, 'parameterFile.txt'
+    parameterFileNameIn, parameterFileNameOut = None, 'mnistRBM-sgd-1000step.para'
+    #parameterFileNameIn, parameterFileNameOut = 'mnistRBM-sgd-1000step.para', None
     runTraining = True
     verbose = False
+    plotFileName = 'mnistRBM-sgd-1000step-3.pdf'
     rng = RandomState(seed=externalRngSeed)
     adams = dict(zip(['visible', 'hidden', 'weights'],
                      [Adam(stepSize=learningRate) for _ in range(3)]))
@@ -98,19 +104,22 @@ def main():
             visibleProportionOn=visibleProportionOn, rngSeed=internalRngSeed)
 
     if runTraining is True:
+        loopStartTime = time.time()
         #build fantasy batch
         miniFantasyBatch = np.copy(getMiniBatchByLabel(trainImagesByLabel, miniBatchSize, rng))
-
         for i in range(iterations):
             miniBatch = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize, rng)
             miniFantasyBatch = rbm.updateParametersSGD(miniBatch, miniFantasyBatch, learningRate, nCDSteps=nCDSteps, l2Coefficient=l2Coefficient, verbose=verbose)
             #miniFantasyBatch = rbm.updateParametersAdam(miniBatch, miniFantasyBatch, adams, nCDSteps=nCDSteps, l2Coefficient=l2Coefficient, verbose=verbose)
             print(rbm.computeReconstructionError(getMiniBatchByLabel(testImagesByLabel, miniBatchSize, rng)))
-            if (i+1) % trainingOutputSkip == 0:
-                print(f'step {i+1} / {iterations}', flush=True)
+            #if (i+1) % trainingOutputSkip == 0:
+            #    print(f'step {i+1} / {iterations}', flush=True)
+        loopEndTime = time.time()
+        print(f'training loop time {loopEndTime-loopStartTime}')
 
-        with open(parameterFileNameOut, 'w') as parameterFile:
-            rbm.dumpParameterFile(parameterFile)
+        if parameterFileNameOut is not None:
+            with open(parameterFileNameOut, 'w') as parameterFile:
+                rbm.dumpParameterFile(parameterFile)
 
     plots = []
     visible = testImages[plotStartIndex]
@@ -118,12 +127,10 @@ def main():
     rbm.visibleLayer = np.copy(visible)
     for i in range(plotNumber-1):
         for j in range(plotSkip):
-            visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=True)
+            visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
         #plots.append(visible)
         plots.append(rbm.rollBernoulliProbabilities(visible))
-    plotMNISTSeries(plots)
-    print(plots[0])
-    print(plots[-1])
+    plotMNISTSeries(plots, plotFileName)
 
 if __name__ == '__main__':
     main()
