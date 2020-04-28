@@ -1,9 +1,11 @@
 import time
 import numpy as np
+import matplotlib
 from matplotlib import pyplot as plt
 from numpy.random import RandomState
 from layers import RestrictedBoltzmannMachine
 from adam import Adam
+import diagnostics
 
 def loadMNIST():
     #load
@@ -12,8 +14,8 @@ def loadMNIST():
     #flatten
     newTrainShape = (trainImages.shape[0], trainImages.shape[1]*trainImages.shape[2])
     newTestShape = (testImages.shape[0], testImages.shape[1]*testImages.shape[2])
-    trainImages = np.reshape(trainImages, newTrainShape)
-    testImages = np.reshape(testImages, newTestShape)
+    trainImages = trainImages.reshape(newTrainShape)
+    testImages = testImages.reshape(newTestShape)
     return trainImages, trainLabels, testImages, testLabels
 
 def sortMNISTByLabel(trainImages, trainLabels, testImages, testLabels):
@@ -46,20 +48,24 @@ def getMiniBatchByLabel(dataByLabel, size, rng):
     rng.shuffle(miniBatch)
     return miniBatch
 
-def plotMNIST(image):
-    plt.imshow(image.reshape(28, 28), cmap='gray')
-    plt.show()
+def plotMNIST(image, mnistRows=28, mnistColumns=28):
+    diagnostics.plotImage(rows=mnistRows,
+                          columns=mnistColumns)
 
-def plotMNISTSeries(images, fileName=None):
-    fig, axs = plt.subplots(1, len(images))
-    for i, ax in enumerate(axs):
-        ax.imshow(images[i].reshape(28, 28), cmap='gray')
-    if fileName is None:
-        plt.show()
-    else:
-        plt.savefig(fileName)
+def plotMNISTSeries(images, mnistRows=28, mnistColumns=28, norm=None, fileName=None):
+    diagnostics.plotImageSeries(images,
+                                rows=mnistRows,
+                                columns=mnistColumns,
+                                norm=norm,
+                                fileName=fileName)
+
+def plotReceptiveFields(rbm, hiddenUnitIndices, fileName=None):
+    norm = matplotlib.colors.Normalize(vmin=rbm.weights[:, hiddenUnitIndices].min(),
+                                       vmax=rbm.weights[:, hiddenUnitIndices].max())
+    plotMNISTSeries(rbm.weights[:, hiddenUnitIndices].T, norm=norm, fileName=fileName)
 
 def main():
+    setupStartTime = time.time()
     #load data
     trainImages, trainLabels, testImages, testLabels = loadMNIST()
     trainImages = binarize(trainImages)
@@ -69,24 +75,37 @@ def main():
 
     #parameters
     numberVisibleUnits = trainImages.shape[-1]
-    numberHiddenUnits = int(numberVisibleUnits * 2./3.)
+    numberHiddenUnits = 200
+    #numberHiddenUnits = int(numberVisibleUnits * 2./3.)
     temperature, nCDSteps = 1., 1
     #sigma = 0.01
     sigma = 2. / np.sqrt(numberVisibleUnits + numberHiddenUnits)
-    iterations, miniBatchSize, learningRate = 100, 100, 0.001
+    gradientWalker = 'sgd'
+    #gradientWalker = 'adam'
+    iterations, miniBatchSize = int(1e5), 10
     internalRngSeed, externalRngSeed = 1337, 1234
-    plotStartIndex, plotNumber, plotSkip = 100, 5, 1
-    trainingOutputSkip = 10
-    l2Coefficient = 1e-4
-    #parameterFileNameIn, parameterFileNameOut = 'parameterFile.txt', 'parameterFile.txt'
-    parameterFileNameIn, parameterFileNameOut = None, 'mnistRBM-sgd-1000step.para'
-    #parameterFileNameIn, parameterFileNameOut = 'mnistRBM-sgd-1000step.para', None
+    rng = RandomState(seed=externalRngSeed)
+    plotStartIndex, plotNumber, plotStride = 100, 5, 1
+    trainingReconstructionErrorOutputStride = 10
+    trainingHistogramOutputStride = iterations // 5
+    l2Coefficient = 1e-2
+    parameterFileNameIn, parameterFileNameOut = None, f'mnistRBM-{gradientWalker}-{iterations}step.para'
     runTraining = True
     verbose = False
-    plotFileName = 'mnistRBM-sgd-1000step-3.pdf'
-    rng = RandomState(seed=externalRngSeed)
-    adams = dict(zip(['visible', 'hidden', 'weights'],
-                     [Adam(stepSize=learningRate) for _ in range(3)]))
+    mnistSeriesPlotFileName = f'mnistSeries-{gradientWalker}-{iterations}steps.pdf'
+    parameterHistogramFilePrefix = f'histogram-{gradientWalker}-{iterations}steps-'
+    numReceptiveFields, receptiveFieldFilePrefix = 9, f'receptiveField-{gradientWalker}-{iterations}steps-'
+    #hiddenUnitActivationsSubset = rng.randint(numberHiddenUnits, size=miniBatchSize)
+    hiddenUnitActivationsSubset = None
+    hiddenUnitActivationFilePrefix = f'hiddenUnitActivation-{gradientWalker}-{iterations}steps-'
+    if gradientWalker == 'sgd':
+        learningRate = 1e-4
+    elif gradientWalker == 'adam':
+        learningRate = 1e-6
+        adams = dict(zip(['visible', 'hidden', 'weights'],
+                         [Adam(stepSize=learningRate) for _ in range(3)]))
+    else:
+        exit(1)
 
     #setup RBM
     visibleProportionOn = np.sum([images.sum(axis=0) for images in trainImagesByLabel], axis=0) / trainImages.shape[0]
@@ -103,34 +122,107 @@ def main():
             temperature=temperature, sigma=sigma,
             visibleProportionOn=visibleProportionOn, rngSeed=internalRngSeed)
 
+    if gradientWalker == 'sgd':
+        updateParameters = lambda miniBatch, \
+                                  miniFantasyBatch: \
+                                      rbm.updateParametersSGD(miniBatch,
+                                                              miniFantasyBatch,
+                                                              learningRate,
+                                                              nCDSteps=nCDSteps,
+                                                              l2Coefficient=l2Coefficient,
+                                                              verbose=verbose)
+    elif gradientWalker == 'adam':
+        updateParameters = lambda miniBatch, \
+                                  miniFantasyBatch: \
+                                      rbm.updateParametersAdam(miniBatch,
+                                                               miniFantasyBatch,
+                                                               adams,
+                                                               nCDSteps=nCDSteps,
+                                                               l2Coefficient=l2Coefficient,
+                                                               verbose=verbose)
+    else:
+        exit(1)
+
+    #build dict for parameter histogram output
+    parameterTypes = {'Visible': rbm.visibleBias,
+                      'Hidden': rbm.hiddenBias,
+                      'Weights': rbm.weights}
+    histogramsByParameterType = {'Visible': [],
+                                 'Hidden': [],
+                                 'Weights': []}
+    historicalRBMs = []
+    hiddenUnitActivations = []
+    setupEndTime = time.time()
+
     if runTraining is True:
         loopStartTime = time.time()
         #build fantasy batch
         miniFantasyBatch = np.copy(getMiniBatchByLabel(trainImagesByLabel, miniBatchSize, rng))
         for i in range(iterations):
             miniBatch = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize, rng)
-            miniFantasyBatch = rbm.updateParametersSGD(miniBatch, miniFantasyBatch, learningRate, nCDSteps=nCDSteps, l2Coefficient=l2Coefficient, verbose=verbose)
-            #miniFantasyBatch = rbm.updateParametersAdam(miniBatch, miniFantasyBatch, adams, nCDSteps=nCDSteps, l2Coefficient=l2Coefficient, verbose=verbose)
-            print(rbm.computeReconstructionError(getMiniBatchByLabel(testImagesByLabel, miniBatchSize, rng)))
-            #if (i+1) % trainingOutputSkip == 0:
-            #    print(f'step {i+1} / {iterations}', flush=True)
+            miniFantasyBatch = updateParameters(miniBatch, miniFantasyBatch)
+            if (i+1) % trainingReconstructionErrorOutputStride == 0:
+                print(i, rbm.computeReconstructionError(getMiniBatchByLabel(testImagesByLabel, miniBatchSize, rng)))
+            if (i+1) % trainingHistogramOutputStride == 0:
+                for parameterType in parameterTypes:
+                    xs, ys, _ = diagnostics.computeHistogramArray(parameterTypes[parameterType].flatten())
+                    histogramsByParameterType[parameterType].append((i, xs, ys))
+                historicalRBMs.append((i, rbm.copy()))
+                hiddenUnitActivations.append((i,
+                    rbm.storeHiddenActivationsOnMiniBatch(miniBatch,
+                                                          hiddenUnits=hiddenUnitActivationsSubset)))
+
+
+        rbm.hiddenConditionalProbabilities()
+
         loopEndTime = time.time()
-        print(f'training loop time {loopEndTime-loopStartTime}')
 
         if parameterFileNameOut is not None:
             with open(parameterFileNameOut, 'w') as parameterFile:
                 rbm.dumpParameterFile(parameterFile)
 
+    outputStartTime = time.time()
+    #plot reconstruction series
     plots = []
     visible = testImages[plotStartIndex]
     plots.append(visible)
     rbm.visibleLayer = np.copy(visible)
     for i in range(plotNumber-1):
-        for j in range(plotSkip):
+        for j in range(plotStride):
             visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
         #plots.append(visible)
         plots.append(rbm.rollBernoulliProbabilities(visible))
-    plotMNISTSeries(plots, plotFileName)
+    plotMNISTSeries(plots, fileName=mnistSeriesPlotFileName)
+
+    #plot parameter histograms
+    for parameterType in histogramsByParameterType:
+        print(parameterType)
+        for i, xs, ys in histogramsByParameterType[parameterType]:
+            print(i, xs.min(), xs.max())
+            parameterHistogramFileName = ''.join((parameterHistogramFilePrefix,
+                                                  parameterType,
+                                                  f'{i}.pdf'))
+            diagnostics.plotHistogramArray(xs, ys, title=parameterType+f' {i}',
+                                           fileName=parameterHistogramFileName)
+    
+    #plot receptive fields
+    hiddenUnitIndices = rng.randint(rbm.hiddenBias.shape[0], size=numReceptiveFields)
+    for i, historicalRBM in historicalRBMs:
+        receptiveFieldFileName = ''.join((receptiveFieldFilePrefix,
+                                          f'{i}.pdf'))
+        plotReceptiveFields(historicalRBM, hiddenUnitIndices, fileName=receptiveFieldFileName)
+
+    #plot hidden unit activations
+    for i, hiddenUnitActivation in hiddenUnitActivations:
+        hiddenUnitActivationFileName = ''.join((hiddenUnitActivationFilePrefix,
+                                                f'{i}.pdf'))
+        diagnostics.plotHiddenActivationsOnMiniBatch(hiddenUnitActivation,
+                                                     fileName=hiddenUnitActivationFileName)
+    outputEndTime = time.time()
+    print(f'setup time {setupEndTime-setupStartTime}s')
+    if runTraining is True:
+        print(f'training loop time {loopEndTime-loopStartTime}s')
+    print(f'output time {outputEndTime-outputStartTime}s')
 
 if __name__ == '__main__':
     main()

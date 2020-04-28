@@ -8,11 +8,17 @@ class RestrictedBoltzmannMachine:
     #initialization methods
     #
 
-    def __init__(self, visibleLayer, hiddenLayer,
+    def __init__(self,
+                 visibleLayer,
+                 hiddenLayer,
                  temperature=1.,
-                 sigma=0.01, visibleProportionOn=None,
+                 sigma=0.01,
+                 visibleProportionOn=None,
                  parameterFile=None,
-                 rng=None, rngSeed=1337):
+                 rng=None,
+                 rngSeed=1337):
+        self.visibleLayer = visibleLayer
+        self.hiddenLayer = hiddenLayer
         self.temperature = temperature
         self.beta = 1. / self.temperature
 
@@ -21,8 +27,6 @@ class RestrictedBoltzmannMachine:
         else:
             self.rng = rng
 
-        self.visibleLayer = visibleLayer
-        self.hiddenLayer = hiddenLayer
 
         if parameterFile is None:
             self.initializeVisibleBias(visibleProportionOn=visibleProportionOn)
@@ -35,7 +39,10 @@ class RestrictedBoltzmannMachine:
         if visibleProportionOn is None:
             self.visibleBias = np.zeros(self.hiddenLayer.shape[-1])
         else:
-            visibleProportionOn[np.isclose(visibleProportionOn, 0.)] = 0.01
+            #find minimum non-zero value
+            nonZeroMin = visibleProportionOn[visibleProportionOn > 0.].min()
+            print(f'nonZeroMin: {nonZeroMin}')
+            visibleProportionOn[np.isclose(visibleProportionOn, 0.)] = nonZeroMin / 10.
             #visibleProportionOn[np.isclose(visibleProportionOn, 1.)] = 0.99
             #self.visibleBias = np.log(visibleProportionOn / (1. - visibleProportionOn))
             self.visibleBias = 1. / visibleProportionOn
@@ -131,13 +138,13 @@ class RestrictedBoltzmannMachine:
 
         visibleMean = miniBatch.mean(axis=0) if clamp is True else visibleOut.mean(axis=0)
         hiddenMean = hiddenOut.mean(axis=0)
-        weightMean = visibleMean[..., :, None] * hiddenMean[..., None, :]
+        weightMean = visibleMean[..., :, None] * hiddenMean[..., None, :] * miniBatch.shape[0]
         return visibleMean, hiddenMean, weightMean, visibleOut
 
     def sgd(self, visibleGradient, hiddenGradient, weightGradient, learningRate):
-        self.visibleBias -= learningRate * visibleGradient
-        self.hiddenBias -= learningRate * hiddenGradient
-        self.weights -= learningRate * weightGradient
+        self.visibleBias += learningRate * visibleGradient
+        self.hiddenBias += learningRate * hiddenGradient
+        self.weights += learningRate * weightGradient
 
     def updateParametersSGD(self, miniBatch, miniFantasyBatch, learningRate, nCDSteps=1, l2Coefficient=0., verbose=False):
         visibleGradient, hiddenGradient, weightGradient, newFantasy = \
@@ -158,9 +165,9 @@ class RestrictedBoltzmannMachine:
         hiddenStep = adams['hidden'].computeAdamStep(hiddenGradient)
         weightStep = adams['weights'].computeAdamStep(weightGradient)
         #update parameters
-        self.visibleBias -= visibleStep
-        self.hiddenBias -= hiddenStep
-        self.weights -= weightStep
+        self.visibleBias += visibleStep
+        self.hiddenBias += hiddenStep
+        self.weights += weightStep
 
         if verbose is True:
             print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(
@@ -187,6 +194,22 @@ class RestrictedBoltzmannMachine:
     #miscellaneous methods
     #
 
+    def copy(self):
+        copyRBM = RestrictedBoltzmannMachine(np.copy(self.visibleLayer),
+                                             np.copy(self.hiddenLayer),
+                                             temperature=self.temperature,
+                                             rng=self.rng)
+        copyRBM.visibleBias = np.copy(self.visibleBias)
+        copyRBM.hiddenBias = np.copy(self.hiddenBias)
+        copyRBM.weights = np.copy(self.weights)
+        return copyRBM
+
+    def storeHiddenActivationsOnMiniBatch(self, miniBatch, hiddenUnits=None):
+        self.visibleLayer = np.copy(miniBatch)
+        self.hiddenConditionalProbabilities()
+        return np.copy(self.hiddenLayer) if hiddenUnits is None \
+                            else self.hiddenLayer[..., hiddenUnits]
+
     def setRngSeed(self, rngSeed):
         self.rng.seed(rngSeed)
 
@@ -195,21 +218,3 @@ class RestrictedBoltzmannMachine:
 
 def logistic(x):
     return 1. / (1. + np.exp(-x))
-        
-#def logistic(x):
-#    np.seterr(all='raise')
-#    try:
-#        value = 1. / (1. + np.exp(-x))
-#    except FloatingPointError:
-#        for y in x:
-#            try:
-#                v = 1./(1.+np.exp(-y))
-#            except FloatingPointError:
-#                np.seterr(all='ignore')
-#                v = 1./(1.+np.exp(-y))
-#                print('{} {} done'.format(y, v), flush=True)
-#                exit(1)
-#            else:
-#                print(y, v, flush=True)
-#    else:
-#        return value
