@@ -1,8 +1,8 @@
 import numpy as np
 
 class Adam:
-    def __init__(self, stepSize=0.001, firstMomentRate=0.9, secondMomentRate=0.999, denominatorEpsilon=1e-8):
-        self.stepSize = stepSize
+    def __init__(self, stepSize=None, firstMomentRate=0.9, secondMomentRate=0.999, denominatorEpsilon=1e-8):
+        self.stepSize = 0.001 if stepSize is None else stepSize
         self.firstMomentRate = firstMomentRate
         self.secondMomentRate = secondMomentRate
         self.denominatorEpsilon = denominatorEpsilon
@@ -34,4 +34,4 @@ class Adam:
                             / (1. - self.firstMomentRate**self.t)
         self.t += 1
         return scaledStepSize * self.firstMoment \
-                / (self.secondMoment + self.denominatorEpsilon)
+                / (np.sqrt(self.secondMoment) + self.denominatorEpsilon)

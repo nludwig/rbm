@@ -80,28 +80,29 @@ def main():
     temperature, nCDSteps = 1., 1
     #sigma = 0.01
     sigma = 2. / np.sqrt(numberVisibleUnits + numberHiddenUnits)
-    gradientWalker = 'sgd'
-    #gradientWalker = 'adam'
+    #gradientWalker = 'sgd'
+    gradientWalker = 'adam'
     iterations, miniBatchSize = int(1e5), 10
     internalRngSeed, externalRngSeed = 1337, 1234
     rng = RandomState(seed=externalRngSeed)
     plotStartIndex, plotNumber, plotStride = 100, 5, 1
     trainingReconstructionErrorOutputStride = 10
     trainingHistogramOutputStride = iterations // 5
-    l2Coefficient = 1e-2
+    l1Coefficient = 1e-5
+    l2Coefficient = None
     parameterFileNameIn, parameterFileNameOut = None, f'mnistRBM-{gradientWalker}-{iterations}step.para'
     runTraining = True
     verbose = False
     mnistSeriesPlotFileName = f'mnistSeries-{gradientWalker}-{iterations}steps.pdf'
-    parameterHistogramFilePrefix = f'histogram-{gradientWalker}-{iterations}steps-'
+    parameterHistogramFilePrefix = f'paraHistogram-{gradientWalker}-{iterations}steps-'
+    gradientHistogramFilePrefix = f'gradHistogram-{gradientWalker}-{iterations}steps-'
     numReceptiveFields, receptiveFieldFilePrefix = 9, f'receptiveField-{gradientWalker}-{iterations}steps-'
-    #hiddenUnitActivationsSubset = rng.randint(numberHiddenUnits, size=miniBatchSize)
-    hiddenUnitActivationsSubset = None
+    hiddenUnitActivationsSubset = rng.randint(numberHiddenUnits, size=numberHiddenUnits//10)
     hiddenUnitActivationFilePrefix = f'hiddenUnitActivation-{gradientWalker}-{iterations}steps-'
     if gradientWalker == 'sgd':
         learningRate = 1e-4
     elif gradientWalker == 'adam':
-        learningRate = 1e-6
+        learningRate = 1e-4
         adams = dict(zip(['visible', 'hidden', 'weights'],
                          [Adam(stepSize=learningRate) for _ in range(3)]))
     else:
@@ -109,6 +110,7 @@ def main():
 
     #setup RBM
     visibleProportionOn = np.sum([images.sum(axis=0) for images in trainImagesByLabel], axis=0) / trainImages.shape[0]
+    #visibleProportionOn = None
     visibleLayer = np.zeros(numberVisibleUnits)
     hiddenLayer = np.zeros(numberHiddenUnits)
     if parameterFileNameIn is not None:
@@ -129,6 +131,7 @@ def main():
                                                               miniFantasyBatch,
                                                               learningRate,
                                                               nCDSteps=nCDSteps,
+                                                              l1Coefficient=l1Coefficient,
                                                               l2Coefficient=l2Coefficient,
                                                               verbose=verbose)
     elif gradientWalker == 'adam':
@@ -138,18 +141,25 @@ def main():
                                                                miniFantasyBatch,
                                                                adams,
                                                                nCDSteps=nCDSteps,
+                                                               l1Coefficient=l1Coefficient,
                                                                l2Coefficient=l2Coefficient,
                                                                verbose=verbose)
     else:
         exit(1)
 
     #build dict for parameter histogram output
-    parameterTypes = {'Visible': rbm.visibleBias,
-                      'Hidden': rbm.hiddenBias,
-                      'Weights': rbm.weights}
-    histogramsByParameterType = {'Visible': [],
-                                 'Hidden': [],
-                                 'Weights': []}
+    weightParameterTypes = {'Visible': rbm.visibleBias,
+                            'Hidden': rbm.hiddenBias,
+                            'Weights': rbm.weights}
+    weightHistogramsByParameterType = {'Visible': [],
+                                      'Hidden': [],
+                                      'Weights': []}
+    gradientParameterTypes = {'Visible': rbm.visibleStep,
+                              'Hidden': rbm.hiddenStep,
+                              'Weights': rbm.weightStep}
+    gradientHistogramsByParameterType = {'Visible': [],
+                                         'Hidden': [],
+                                         'Weights': []}
     historicalRBMs = []
     hiddenUnitActivations = []
     setupEndTime = time.time()
@@ -164,9 +174,11 @@ def main():
             if (i+1) % trainingReconstructionErrorOutputStride == 0:
                 print(i, rbm.computeReconstructionError(getMiniBatchByLabel(testImagesByLabel, miniBatchSize, rng)))
             if (i+1) % trainingHistogramOutputStride == 0:
-                for parameterType in parameterTypes:
-                    xs, ys, _ = diagnostics.computeHistogramArray(parameterTypes[parameterType].flatten())
-                    histogramsByParameterType[parameterType].append((i, xs, ys))
+                for parameterType in weightParameterTypes:
+                    xs, ys, _ = diagnostics.computeHistogramArray(weightParameterTypes[parameterType].flatten())
+                    weightHistogramsByParameterType[parameterType].append((i, xs, ys))
+                    xs, ys, _ = diagnostics.computeHistogramArray(gradientParameterTypes[parameterType].flatten())
+                    gradientHistogramsByParameterType[parameterType].append((i, xs, ys))
                 historicalRBMs.append((i, rbm.copy()))
                 hiddenUnitActivations.append((i,
                     rbm.storeHiddenActivationsOnMiniBatch(miniBatch,
@@ -186,7 +198,7 @@ def main():
     plots = []
     visible = testImages[plotStartIndex]
     plots.append(visible)
-    rbm.visibleLayer = np.copy(visible)
+    rbm.visibleLayer = visible
     for i in range(plotNumber-1):
         for j in range(plotStride):
             visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
@@ -195,15 +207,43 @@ def main():
     plotMNISTSeries(plots, fileName=mnistSeriesPlotFileName)
 
     #plot parameter histograms
-    for parameterType in histogramsByParameterType:
+    print('#step\tparaLo\tparaHi\tgradLo\tgradHi\tratioLo\tratioHi')
+    for parameterType in weightHistogramsByParameterType:
         print(parameterType)
-        for i, xs, ys in histogramsByParameterType[parameterType]:
-            print(i, xs.min(), xs.max())
-            parameterHistogramFileName = ''.join((parameterHistogramFilePrefix,
-                                                  parameterType,
-                                                  f'{i}.pdf'))
-            diagnostics.plotHistogramArray(xs, ys, title=parameterType+f' {i}',
-                                           fileName=parameterHistogramFileName)
+        for i, (step, xs, ys) in enumerate(weightHistogramsByParameterType[parameterType]):
+            print('{}\t{:.3f}\t{:.3f}'.format(step, xs.min(), xs.max()), end='\t')
+            _, gradxs, gradys = gradientHistogramsByParameterType[parameterType][i]
+            print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(gradxs.min(), gradxs.max(),
+                                        gradxs.min()/xs.min(), gradxs.max()/xs.max()))
+
+            #parameterHistogramFileName = ''.join((parameterHistogramFilePrefix,
+            #                                      parameterType,
+            #                                      f'{step}.pdf'))
+            #diagnostics.plotHistogramArray(xs, ys, title=parameterType+f' {step}',
+            #                               fileName=parameterHistogramFileName)
+
+            #gradientHistogramFileName = ''.join((gradientHistogramFilePrefix,
+            #                                     parameterType,
+            #                                     f'{step}.pdf'))
+            #diagnostics.plotHistogramArray(gradxs, gradys, title=parameterType+f' grad {step}',
+            #                               fileName=gradientHistogramFileName)
+
+        parameterHistogramTSFileName = ''.join((parameterHistogramFilePrefix,
+                                                parameterType,
+                                                f'TimeSeries.pdf'))
+        diagnostics.plotHistogramArraySeries(
+            [weightHistogram[1] for weightHistogram in weightHistogramsByParameterType[parameterType]],
+            [weightHistogram[2] for weightHistogram in weightHistogramsByParameterType[parameterType]],
+            title=parameterType+' time series',
+            fileName=parameterHistogramTSFileName)
+        gradientHistogramTSFileName = ''.join((gradientHistogramFilePrefix,
+                                               parameterType,
+                                               f'TimeSeries.pdf'))
+        diagnostics.plotHistogramArraySeries(
+            [gradientHistogram[1] for gradientHistogram in gradientHistogramsByParameterType[parameterType]],
+            [gradientHistogram[2] for gradientHistogram in gradientHistogramsByParameterType[parameterType]],
+            title=parameterType+' grad time series',
+            fileName=gradientHistogramTSFileName)
     
     #plot receptive fields
     hiddenUnitIndices = rng.randint(rbm.hiddenBias.shape[0], size=numReceptiveFields)

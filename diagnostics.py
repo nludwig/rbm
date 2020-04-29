@@ -30,10 +30,19 @@ def plotImageSeries(images, rows, columns, norm=None, fileName=None):
     plt.clf()
 
 def plotHistogramArray(binCenters, histogram, title='', fileName=None):
-    #width = 0.7 * (binCenters[1] - binCenters[0])
-    #plt.bar(binCenters, histogram, align='center', width=width)
     plt.plot(binCenters, histogram)
     plt.title(title)
+    if fileName is None:
+        plt.show()
+    else:
+        plt.savefig(fileName)
+    plt.clf()
+
+def plotHistogramArraySeries(binCenterss, histograms, title='', fileName=None):
+    for i, binCenters in enumerate(binCenterss):
+        plt.plot(binCenters, histograms[i], label=f'{i}')
+    plt.title(title)
+    plt.legend()
     if fileName is None:
         plt.show()
     else:

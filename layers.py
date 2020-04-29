@@ -16,6 +16,7 @@ class RestrictedBoltzmannMachine:
                  visibleProportionOn=None,
                  parameterFile=None,
                  rng=None,
+                 rngState=None,
                  rngSeed=1337):
         self.visibleLayer = visibleLayer
         self.hiddenLayer = hiddenLayer
@@ -24,9 +25,10 @@ class RestrictedBoltzmannMachine:
 
         if rng is None:
             self.rng = RandomState(seed=rngSeed)
+            if rngState is not None:
+                self.rng.set_state(rngState)
         else:
             self.rng = rng
-
 
         if parameterFile is None:
             self.initializeVisibleBias(visibleProportionOn=visibleProportionOn)
@@ -34,18 +36,22 @@ class RestrictedBoltzmannMachine:
             self.initializeWeights(sigma)
         else:
             self.loadParameterFile(parameterFile)
+        self.visibleStep = np.zeros_like(self.visibleBias)
+        self.hiddenStep = np.zeros_like(self.hiddenBias)
+        self.weightStep = np.zeros_like(self.weights)
 
     def initializeVisibleBias(self, visibleProportionOn=None):
         if visibleProportionOn is None:
-            self.visibleBias = np.zeros(self.hiddenLayer.shape[-1])
+            self.visibleBias = np.zeros(self.visibleLayer.shape[-1])
         else:
             #find minimum non-zero value
             nonZeroMin = visibleProportionOn[visibleProportionOn > 0.].min()
-            print(f'nonZeroMin: {nonZeroMin}')
-            visibleProportionOn[np.isclose(visibleProportionOn, 0.)] = nonZeroMin / 10.
-            #visibleProportionOn[np.isclose(visibleProportionOn, 1.)] = 0.99
-            #self.visibleBias = np.log(visibleProportionOn / (1. - visibleProportionOn))
-            self.visibleBias = 1. / visibleProportionOn
+            visibleProportionOn[np.isclose(visibleProportionOn, 0.)] = nonZeroMin + (0. - nonZeroMin) / 2.
+            nonOneMax = visibleProportionOn[visibleProportionOn < 1.].max()
+            print(f'nonZeroMin, nonOneMax: {nonZeroMin}, {nonOneMax}')
+            visibleProportionOn[np.isclose(visibleProportionOn, 1.)] = nonOneMax + (1. - nonOneMax) / 2.
+            self.visibleBias = np.log(visibleProportionOn / (1. - visibleProportionOn))
+            #self.visibleBias = 1. / visibleProportionOn
 
     def initializeHiddenBias(self):
         self.hiddenBias = np.zeros(self.hiddenLayer.shape[-1])
@@ -54,13 +60,12 @@ class RestrictedBoltzmannMachine:
         self.weights = self.rng.normal(scale=sigma, size=(self.visibleLayer.shape[-1], self.hiddenLayer.shape[-1]))
 
     def loadParameterFile(self, parameterFile):
-        #assert type(parameterFile) == file
-        fileContents = [float(line.strip()) for line in parameterFile]
         lv = self.visibleLayer.shape[-1]
         lh = self.hiddenLayer.shape[-1]
         visibleSlice = slice(0, lv)
         hiddenSlice = slice(lv, lv+lh)
-        weightsSlice = slice(lv+lh,lv+lh+lv*lh)
+        weightsSlice = slice(lv+lh, lv+lh+lv*lh)
+        fileContents = [float(line.strip()) for line in parameterFile]
         self.visibleBias = np.array(fileContents[visibleSlice])
         self.hiddenBias = np.array(fileContents[hiddenSlice])
         self.weights = np.array(fileContents[weightsSlice]).reshape((lv, lh))
@@ -80,110 +85,112 @@ class RestrictedBoltzmannMachine:
     #
 
     def hiddenConditionalProbabilities(self):
-        #compute unit energies and activation probabilities
-        conditionalEnergies = -(self.hiddenBias + self.visibleLayer@self.weights)
+        conditionalEnergies = self.hiddenBias + self.visibleLayer@self.weights
         return logistic(self.beta * conditionalEnergies)
 
     def visibleConditionalProbabilities(self):
-        #compute unit energies and activation probabilities
-        conditionalEnergies = -(self.visibleBias + self.hiddenLayer@self.weights.T)
+        conditionalEnergies = self.visibleBias + self.hiddenLayer@self.weights.T
         return logistic(self.beta * conditionalEnergies)
 
     def rollBernoulliProbabilities(self, probabilities):
         rolls = self.rng.uniform(size=probabilities.shape)
         return (rolls < probabilities).astype(np.float_)
 
-    def gibbsSample(self, visibleData=None, hiddenUnitsStochastic=False):
-        #load visibleDate; else use current values
-        if visibleData is not None:
-            self.visibleLayer = np.copy(visibleData)
+    def gibbsSample(self, hiddenUnitsStochastic=False):
         #compute hidden activation probabilities given visible
         hiddenLayerProbabilities = self.hiddenConditionalProbabilities()
-        self.hiddenLayer = \
-            self.rollBernoulliProbabilities(hiddenLayerProbabilities) \
-            if hiddenUnitsStochastic is True else \
-            hiddenLayerProbabilities
+        if hiddenUnitsStochastic:
+            self.hiddenLayer = self.rollBernoulliProbabilities(hiddenLayerProbabilities)
+        else:
+            self.hiddenLayer = hiddenLayerProbabilities
         #compute visible activation probabilities given hidden
-        visibleLayerProbabilities = self.visibleConditionalProbabilities()
-        self.visibleLayer = visibleLayerProbabilities
-        return visibleLayerProbabilities, hiddenLayerProbabilities
+        self.visibleLayer = self.visibleConditionalProbabilities()
+        return self.visibleLayer, hiddenLayerProbabilities
 
 
     #
     #training methods
     #
 
-    def computePCDGradient(self, miniBatch, miniFantasyBatch, nCDSteps=1, l2Coefficient=0.):
-        #compute "positive"/data mean
-        visibleDataMean, hiddenDataMean, weightDataMean, _ = \
-            self.computePCDGradientHalves(miniBatch, True, clamp=True)
-
-        #compute "negative"/model mean
+    def computePCDGradient(self, miniBatch, miniFantasyBatch, nCDSteps=1, l1Coefficient=None, l2Coefficient=None):
+        visibleDataMean, hiddenDataMean, weightDataMean = self.computePCDGradientPositiveHalf(miniBatch)
         visibleModelMean, hiddenModelMean, weightModelMean, newFantasy = \
-            self.computePCDGradientHalves(miniFantasyBatch, False, nCDSteps=nCDSteps)
+            self.computePCDGradientNegativeHalf(miniFantasyBatch, nCDSteps=nCDSteps)
 
         #compute gradients & return
         visibleGradient = visibleDataMean - visibleModelMean
         hiddenGradient = hiddenDataMean - hiddenModelMean
-        weightGradient = weightDataMean - weightModelMean - l2Coefficient * self.weights
+        weightGradient = weightDataMean - weightModelMean
+        if l1Coefficient is not None:
+            weightGradient -= l1Coefficient * np.sign(self.weights)
+        if l2Coefficient is not None:
+            weightGradient -= l2Coefficient * self.weights
         return visibleGradient, hiddenGradient, weightGradient, newFantasy
 
-    def computePCDGradientHalves(self, miniBatch, hiddenUnitsStochastic, nCDSteps=1, clamp=False):
-        visibleIn = np.copy(miniBatch)
+    def computePCDGradientPositiveHalf(self, miniBatch):
+        self.visibleLayer = miniBatch
+        hiddenLayerProbabilities = self.hiddenConditionalProbabilities()
+        return self.computeParameterMeans(miniBatch, hiddenLayerProbabilities)
+
+    def computePCDGradientNegativeHalf(self, miniFantasyBatch, nCDSteps=1):
+        self.visibleLayer = miniFantasyBatch
         for _ in range(nCDSteps):
-            visibleOut, hiddenOut = self.gibbsSample(visibleData=visibleIn,
-                                        hiddenUnitsStochastic=hiddenUnitsStochastic)
-                
-            visibleIn = None #if nCDSteps > 1, use visibleData as found in previous step
+            visibleOut, hiddenOut = self.gibbsSample()
+        return self.computeParameterMeans(visibleOut, hiddenOut) + (visibleOut,)
 
-        visibleMean = miniBatch.mean(axis=0) if clamp is True else visibleOut.mean(axis=0)
-        hiddenMean = hiddenOut.mean(axis=0)
-        weightMean = visibleMean[..., :, None] * hiddenMean[..., None, :] * miniBatch.shape[0]
-        return visibleMean, hiddenMean, weightMean, visibleOut
+    def computeParameterMeans(self, visible, hidden):
+        visibleMean = visible.mean(axis=0)
+        hiddenMean = hidden.mean(axis=0)
+        weightMean = visibleMean[..., :, None] * hiddenMean[..., None, :] * visible.shape[0]
+        return visibleMean, hiddenMean, weightMean
 
-    def sgd(self, visibleGradient, hiddenGradient, weightGradient, learningRate):
-        self.visibleBias += learningRate * visibleGradient
-        self.hiddenBias += learningRate * hiddenGradient
-        self.weights += learningRate * weightGradient
+    def updateParameters(self):
+        self.visibleBias += self.visibleStep
+        self.hiddenBias +=  self.hiddenStep
+        self.weights += self.weightStep
 
-    def updateParametersSGD(self, miniBatch, miniFantasyBatch, learningRate, nCDSteps=1, l2Coefficient=0., verbose=False):
+    def updateParametersSGD(self, miniBatch, miniFantasyBatch, learningRate, nCDSteps=1,
+                            l1Coefficient=None, l2Coefficient=None, verbose=False):
         visibleGradient, hiddenGradient, weightGradient, newFantasy = \
-            self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps, l2Coefficient=l2Coefficient)
-        self.sgd(visibleGradient, hiddenGradient, weightGradient, learningRate)
+            self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps,
+                                    l1Coefficient=l1Coefficient, l2Coefficient=l2Coefficient)
+        #hack to stop changing the *Step pointer; req'd for
+        # current implementation of histograms of *Steps
+        self.visibleStep += learningRate * visibleGradient - self.visibleStep
+        self.hiddenStep += learningRate * hiddenGradient - self.hiddenStep
+        self.weightStep += learningRate * weightGradient - self.weightStep
+        self.updateParameters()
         if verbose is True:
-            print('{:.3f}\t{:.3f}\t{:.3f}'.format(visibleGradient.mean(),
-                                                  hiddenGradient.mean(),
-                                                  weightGradient.mean()))
+            print('{:.3f}\t{:.3f}\t{:.3f}'.format(self.visibleStep.mean(),
+                                                  self.hiddenStep.mean(),
+                                                  self.weightStep.mean()))
         return newFantasy
 
-    def updateParametersAdam(self, miniBatch, miniFantasyBatch, adams, nCDSteps=1, l2Coefficient=0., verbose=False):
-        #compute gradients
+    def updateParametersAdam(self, miniBatch, miniFantasyBatch, adams, nCDSteps=1,
+                             l1Coefficient=None, l2Coefficient=None, verbose=False):
         visibleGradient, hiddenGradient, weightGradient, newFantasy = \
-            self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps, l2Coefficient=l2Coefficient)
-        #compute adam updates
-        visibleStep = adams['visible'].computeAdamStep(visibleGradient)
-        hiddenStep = adams['hidden'].computeAdamStep(hiddenGradient)
-        weightStep = adams['weights'].computeAdamStep(weightGradient)
-        #update parameters
-        self.visibleBias += visibleStep
-        self.hiddenBias += hiddenStep
-        self.weights += weightStep
-
+            self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps,
+                                    l1Coefficient=l1Coefficient, l2Coefficient=l2Coefficient)
+        #hack to stop changing the *Step pointer; req'd for
+        # current implementation of histograms of *Steps
+        self.visibleStep += adams['visible'].computeAdamStep(visibleGradient) - self.visibleStep
+        self.hiddenStep += adams['hidden'].computeAdamStep(hiddenGradient) - self.hiddenStep
+        self.weightStep += adams['weights'].computeAdamStep(weightGradient) - self.weightStep
+        self.updateParameters()
         if verbose is True:
             print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(
                                           visibleGradient.mean(),
                                           hiddenGradient.mean(),
                                           weightGradient.mean(),
-                                          visibleStep.mean(),
-                                          hiddenStep.mean(),
-                                          weightStep.mean()))
+                                          self.visibleStep.mean(),
+                                          self.hiddenStep.mean(),
+                                          self.weightStep.mean()))
         return newFantasy
 
     def computeReconstructionError(self, miniBatch, nCDSteps=1):
-        visibleIn = np.copy(miniBatch)
+        self.visibleLayer = miniBatch
         for _ in range(nCDSteps):
-            visibleOut, hiddenOut = self.gibbsSample(visibleData=visibleIn)
-            visibleIn = None #if nCDSteps > 1, use visibleData as found in previous step
+            visibleOut, hiddenOut = self.gibbsSample()
         #visibleOut = self.rollBernoulliProbabilities(visibleOut)
         sampleError = miniBatch - visibleOut
         meanSquaredError = (sampleError * sampleError).mean()
@@ -198,17 +205,20 @@ class RestrictedBoltzmannMachine:
         copyRBM = RestrictedBoltzmannMachine(np.copy(self.visibleLayer),
                                              np.copy(self.hiddenLayer),
                                              temperature=self.temperature,
-                                             rng=self.rng)
+                                             rngState=self.rng.get_state())
         copyRBM.visibleBias = np.copy(self.visibleBias)
         copyRBM.hiddenBias = np.copy(self.hiddenBias)
         copyRBM.weights = np.copy(self.weights)
+        copyRBM.visibleStep = np.copy(self.visibleStep)
+        copyRBM.hiddenStep = np.copy(self.hiddenStep)
+        copyRBM.weightStep = np.copy(self.weightStep)
         return copyRBM
 
     def storeHiddenActivationsOnMiniBatch(self, miniBatch, hiddenUnits=None):
-        self.visibleLayer = np.copy(miniBatch)
+        self.visibleLayer = miniBatch
         self.hiddenConditionalProbabilities()
         return np.copy(self.hiddenLayer) if hiddenUnits is None \
-                            else self.hiddenLayer[..., hiddenUnits]
+          else np.copy(self.hiddenLayer[..., hiddenUnits])
 
     def setRngSeed(self, rngSeed):
         self.rng.seed(rngSeed)
