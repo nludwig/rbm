@@ -5,10 +5,9 @@ from matplotlib import pyplot as plt
 #plotting
 #
 
-def plotImage(image, rows, columnns):
+def plotImage(image, rows, columnns, fileName=None):
     plt.imshow(image.reshape(rows, columns), cmap='gray')
-    plt.show()
-    plt.clf()
+    outputPlot(fileName)
 
 def plotImageSeries(images, rows, columns, norm=None, fileName=None):
     rootNumberImages = np.sqrt(len(images))
@@ -23,34 +22,33 @@ def plotImageSeries(images, rows, columns, norm=None, fileName=None):
                                 sharey=True)
     for i, ax in enumerate(axs.flatten()):
         ax.imshow(images[i].reshape(rows, columns), cmap='gray', norm=norm)
-    if fileName is None:
-        plt.show()
-    else:
-        plt.savefig(fileName)
-    plt.clf()
+    outputPlot(fileName)
 
 def plotHistogramArray(binCenters, histogram, title='', fileName=None):
     plt.plot(binCenters, histogram)
     plt.title(title)
-    if fileName is None:
-        plt.show()
-    else:
-        plt.savefig(fileName)
-    plt.clf()
+    outputPlot(fileName)
 
 def plotHistogramArraySeries(binCenterss, histograms, title='', fileName=None):
     for i, binCenters in enumerate(binCenterss):
         plt.plot(binCenters, histograms[i], label=f'{i}')
     plt.title(title)
     plt.legend()
-    if fileName is None:
-        plt.show()
-    else:
-        plt.savefig(fileName)
-    plt.clf()
+    outputPlot(fileName)
 
 def plotHiddenActivationsOnMiniBatch(activations, fileName=None):
     plt.imshow(activations, cmap='gray')
+    outputPlot(fileName)
+
+def plotTrainingTestAverageFEVsTime(t, trainFE, testFE, fileName=None):
+    plt.plot(t, trainFE, label='train')
+    plt.plot(t, testFE, label='test')
+    plt.legend()
+    plt.xlabel('time, t')
+    plt.ylabel('free energy, F(t)')
+    outputPlot(fileName)
+
+def outputPlot(fileName=None):
     if fileName is None:
         plt.show()
     else:

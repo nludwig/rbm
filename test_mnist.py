@@ -82,14 +82,15 @@ def main():
     sigma = 2. / np.sqrt(numberVisibleUnits + numberHiddenUnits)
     #gradientWalker = 'sgd'
     gradientWalker = 'adam'
-    iterations, miniBatchSize = int(1e5), 10
+    iterations, miniBatchSize = int(1e2), 10
     internalRngSeed, externalRngSeed = 1337, 1234
     rng = RandomState(seed=externalRngSeed)
     plotStartIndex, plotNumber, plotStride = 100, 5, 1
     trainingReconstructionErrorOutputStride = 10
-    trainingHistogramOutputStride = iterations // 5
-    l1Coefficient = 1e-5
-    l2Coefficient = None
+    trainingOutputStride = iterations // 5
+    #l1Coefficient = 1e-5
+    l1Coefficient = None
+    l2Coefficient = 1e-4
     parameterFileNameIn, parameterFileNameOut = None, f'mnistRBM-{gradientWalker}-{iterations}step.para'
     runTraining = True
     verbose = False
@@ -99,6 +100,7 @@ def main():
     numReceptiveFields, receptiveFieldFilePrefix = 9, f'receptiveField-{gradientWalker}-{iterations}steps-'
     hiddenUnitActivationsSubset = rng.randint(numberHiddenUnits, size=numberHiddenUnits//10)
     hiddenUnitActivationFilePrefix = f'hiddenUnitActivation-{gradientWalker}-{iterations}steps-'
+    feFileName = f'fe-{gradientWalker}-{iterations}steps.pdf'
     if gradientWalker == 'sgd':
         learningRate = 1e-4
     elif gradientWalker == 'adam':
@@ -162,6 +164,9 @@ def main():
                                          'Weights': []}
     historicalRBMs = []
     hiddenUnitActivations = []
+    historicalFEs = []
+    trainSamplesForFE = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize*10, rng)
+    testSamplesForFE = getMiniBatchByLabel(testImagesByLabel, miniBatchSize*10, rng)
     setupEndTime = time.time()
 
     if runTraining is True:
@@ -173,7 +178,7 @@ def main():
             miniFantasyBatch = updateParameters(miniBatch, miniFantasyBatch)
             if (i+1) % trainingReconstructionErrorOutputStride == 0:
                 print(i, rbm.computeReconstructionError(getMiniBatchByLabel(testImagesByLabel, miniBatchSize, rng)))
-            if (i+1) % trainingHistogramOutputStride == 0:
+            if (i+1) % trainingOutputStride == 0:
                 for parameterType in weightParameterTypes:
                     xs, ys, _ = diagnostics.computeHistogramArray(weightParameterTypes[parameterType].flatten())
                     weightHistogramsByParameterType[parameterType].append((i, xs, ys))
@@ -183,6 +188,9 @@ def main():
                 hiddenUnitActivations.append((i,
                     rbm.storeHiddenActivationsOnMiniBatch(miniBatch,
                                                           hiddenUnits=hiddenUnitActivationsSubset)))
+                historicalFEs.append((i,
+                                      rbm.computeMeanFreeEnergy(trainSamplesForFE),
+                                      rbm.computeMeanFreeEnergy(testSamplesForFE)))
 
 
         rbm.hiddenConditionalProbabilities()
@@ -258,6 +266,13 @@ def main():
                                                 f'{i}.pdf'))
         diagnostics.plotHiddenActivationsOnMiniBatch(hiddenUnitActivation,
                                                      fileName=hiddenUnitActivationFileName)
+
+    #plot FE vs time
+    t = [fe[0] for fe in historicalFEs]
+    trainFE = [fe[1] for fe in historicalFEs]
+    testFE = [fe[2] for fe in historicalFEs]
+    diagnostics.plotTrainingTestAverageFEVsTime(t, trainFE, testFE, fileName=feFileName)
+
     outputEndTime = time.time()
     print(f'setup time {setupEndTime-setupStartTime}s')
     if runTraining is True:

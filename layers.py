@@ -187,6 +187,11 @@ class RestrictedBoltzmannMachine:
                                           self.weightStep.mean()))
         return newFantasy
 
+
+    #
+    #analysis methods
+    #
+
     def computeReconstructionError(self, miniBatch, nCDSteps=1):
         self.visibleLayer = miniBatch
         for _ in range(nCDSteps):
@@ -195,6 +200,17 @@ class RestrictedBoltzmannMachine:
         sampleError = miniBatch - visibleOut
         meanSquaredError = (sampleError * sampleError).mean()
         return meanSquaredError
+
+    def computeFreeEnergy(self, miniBatch=None):
+        if miniBatch is not None:
+            self.visibleLayer = miniBatch
+        internalFE = -self.visibleLayer @ self.visibleBias
+        externalConditionalE = self.hiddenBias + self.visibleLayer@self.weights
+        externalFE = -np.log(1. + np.exp(externalConditionalE)).sum(axis=1)
+        return internalFE + externalFE
+
+    def computeMeanFreeEnergy(self, miniBatch=None):
+        return self.computeFreeEnergy(miniBatch).mean()
 
 
     #
