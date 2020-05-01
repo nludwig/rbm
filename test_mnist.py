@@ -37,7 +37,7 @@ def getMiniBatch(data, size, rng):
     indices = rng.randint(data.shape[0], size=size)
     return data[indices]
 
-def getMiniBatchByLabel(dataByLabel, size, rng):
+def getMiniBatchByLabel(dataByLabel, size, rng, shuffle=True):
     assert size % len(dataByLabel) == 0
     perLabel = size // len(dataByLabel)
     vectorLength = dataByLabel[0].shape[-1]
@@ -45,7 +45,8 @@ def getMiniBatchByLabel(dataByLabel, size, rng):
     for data in dataByLabel:
         miniBatch = np.append(miniBatch, getMiniBatch(data, perLabel, rng))
     miniBatch = miniBatch.reshape((len(miniBatch)//vectorLength, vectorLength))
-    rng.shuffle(miniBatch)
+    if shuffle:
+        rng.shuffle(miniBatch)
     return miniBatch
 
 def plotMNIST(image, mnistRows=28, mnistColumns=28):
@@ -82,25 +83,27 @@ def main():
     sigma = 2. / np.sqrt(numberVisibleUnits + numberHiddenUnits)
     #gradientWalker = 'sgd'
     gradientWalker = 'adam'
-    iterations, miniBatchSize = int(1e2), 10
+    iterations, miniBatchSize = int(5e6), 10
     internalRngSeed, externalRngSeed = 1337, 1234
     rng = RandomState(seed=externalRngSeed)
-    plotStartIndex, plotNumber, plotStride = 100, 5, 1
+    plotNumber, plotStride = 5, 1
     trainingReconstructionErrorOutputStride = 10
     trainingOutputStride = iterations // 5
     #l1Coefficient = 1e-5
     l1Coefficient = None
     l2Coefficient = 1e-4
-    parameterFileNameIn, parameterFileNameOut = None, f'mnistRBM-{gradientWalker}-{iterations}step.para'
+    parameterFileNameIn, parameterFileNameOut = f'mnistRBM-{gradientWalker}-1000000step.para', f'mnistRBM-{gradientWalker}-{iterations+1000000}step.para'
     runTraining = True
     verbose = False
-    mnistSeriesPlotFileName = f'mnistSeries-{gradientWalker}-{iterations}steps.pdf'
+    mnistReconProbPlotFilePrefix = f'mnistReconProb-{gradientWalker}-{iterations}steps-'
+    mnistReconPlotFilePrefix = f'mnistRecon-{gradientWalker}-{iterations}steps-'
     parameterHistogramFilePrefix = f'paraHistogram-{gradientWalker}-{iterations}steps-'
     gradientHistogramFilePrefix = f'gradHistogram-{gradientWalker}-{iterations}steps-'
     numReceptiveFields, receptiveFieldFilePrefix = 9, f'receptiveField-{gradientWalker}-{iterations}steps-'
     hiddenUnitActivationsSubset = rng.randint(numberHiddenUnits, size=numberHiddenUnits//10)
     hiddenUnitActivationFilePrefix = f'hiddenUnitActivation-{gradientWalker}-{iterations}steps-'
     feFileName = f'fe-{gradientWalker}-{iterations}steps.pdf'
+    feRatioFileName = f'feRatio-{gradientWalker}-{iterations}steps.pdf'
     if gradientWalker == 'sgd':
         learningRate = 1e-4
     elif gradientWalker == 'adam':
@@ -203,16 +206,20 @@ def main():
 
     outputStartTime = time.time()
     #plot reconstruction series
-    plots = []
-    visible = testImages[plotStartIndex]
-    plots.append(visible)
-    rbm.visibleLayer = visible
-    for i in range(plotNumber-1):
-        for j in range(plotStride):
-            visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
-        #plots.append(visible)
-        plots.append(rbm.rollBernoulliProbabilities(visible))
-    plotMNISTSeries(plots, fileName=mnistSeriesPlotFileName)
+    reconstructionPlots = []
+    reconstructionProbPlots = []
+    visibleStarts = getMiniBatchByLabel(testImagesByLabel, 10, rng)
+    reconstructionPlots.append([visible] for visible in visibleStarts)
+    reconstructionProbPlots.append([visible] for visible in visibleStarts)
+    for i, visible in enumerate(visibleStarts):
+        rbm.visibleLayer = visible
+        for _ in range(plotNumber-1):
+            for _ in range(plotStride):
+                visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
+            reconstructionProbPlots.append(visible)
+            reconstructionPlots.append(rbm.rollBernoulliProbabilities(visible))
+        plotMNISTSeries(reconstructionProbPlots, fileName=''.join((mnistReconProbPlotFilePrefix, f'{i}.pdf')))
+        plotMNISTSeries(reconstructionPlots, fileName=''.join((mnistReconPlotFilePrefix, f'{i}.pdf')))
 
     #plot parameter histograms
     print('#step\tparaLo\tparaHi\tgradLo\tgradHi\tratioLo\tratioHi')
@@ -272,6 +279,7 @@ def main():
     trainFE = [fe[1] for fe in historicalFEs]
     testFE = [fe[2] for fe in historicalFEs]
     diagnostics.plotTrainingTestAverageFEVsTime(t, trainFE, testFE, fileName=feFileName)
+    diagnostics.plotTrainingTestAverageFEVsTime(t, trainFE/testFE, None, fileName=feRatioFileName)
 
     outputEndTime = time.time()
     print(f'setup time {setupEndTime-setupStartTime}s')

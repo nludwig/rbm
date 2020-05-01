@@ -42,7 +42,8 @@ def plotHiddenActivationsOnMiniBatch(activations, fileName=None):
 
 def plotTrainingTestAverageFEVsTime(t, trainFE, testFE, fileName=None):
     plt.plot(t, trainFE, label='train')
-    plt.plot(t, testFE, label='test')
+    if testFE is not None:
+        plt.plot(t, testFE, label='test')
     plt.legend()
     plt.xlabel('time, t')
     plt.ylabel('free energy, F(t)')
