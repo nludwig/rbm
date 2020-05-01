@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib
 from matplotlib import pyplot as plt
 from numpy.random import RandomState
-from layers import RestrictedBoltzmannMachine
+from rbm import RestrictedBoltzmannMachine
 from adam import Adam
 import diagnostics
 
