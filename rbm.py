@@ -136,7 +136,10 @@ class RestrictedBoltzmannMachine:
         self.visibleLayer = miniFantasyBatch
         for _ in range(nCDSteps):
             visibleOut, hiddenOut = self.gibbsSample()
-        return self.computeParameterMeans(visibleOut, hiddenOut) + (visibleOut,)
+        #store for possible use by adversary
+        self.visibleModelMean, self.hiddenModelMean, self.weightModelMean = \
+                                self.computeParameterMeans(visibleOut, hiddenOut)
+        return self.visibleModelMean, self.hiddenModelMean, self.weightModelMean, visibleOut
 
     def computeParameterMeans(self, visible, hidden):
         visibleMean = visible.mean(axis=0)
@@ -146,7 +149,7 @@ class RestrictedBoltzmannMachine:
 
     def updateParameters(self):
         self.visibleBias += self.visibleStep
-        self.hiddenBias +=  self.hiddenStep
+        self.hiddenBias += self.hiddenStep
         self.weights += self.weightStep
 
     def updateParametersSGD(self, miniBatch, miniFantasyBatch, learningRate, nCDSteps=1,
@@ -171,6 +174,28 @@ class RestrictedBoltzmannMachine:
         visibleGradient, hiddenGradient, weightGradient, newFantasy = \
             self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps,
                                     l1Coefficient=l1Coefficient, l2Coefficient=l2Coefficient)
+        #hack to stop changing the *Step pointer; req'd for
+        # current implementation of histograms of *Steps
+        self.visibleStep += adams['visible'].computeAdamStep(visibleGradient) - self.visibleStep
+        self.hiddenStep += adams['hidden'].computeAdamStep(hiddenGradient) - self.hiddenStep
+        self.weightStep += adams['weights'].computeAdamStep(weightGradient) - self.weightStep
+        self.updateParameters()
+        if verbose is True:
+            print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(
+                                          visibleGradient.mean(),
+                                          hiddenGradient.mean(),
+                                          weightGradient.mean(),
+                                          self.visibleStep.mean(),
+                                          self.hiddenStep.mean(),
+                                          self.weightStep.mean()))
+        return newFantasy
+
+    def updateParametersAdamAdversarial(self, miniBatch, miniFantasyBatch, adams, gamma, adversary,
+                                        nCDSteps=1, l1Coefficient=None, l2Coefficient=None, verbose=False):
+        visibleGradient, hiddenGradient, weightGradient, newFantasy = \
+            self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps,
+                                    l1Coefficient=l1Coefficient, l2Coefficient=l2Coefficient)
+
         #hack to stop changing the *Step pointer; req'd for
         # current implementation of histograms of *Steps
         self.visibleStep += adams['visible'].computeAdamStep(visibleGradient) - self.visibleStep

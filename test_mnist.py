@@ -49,6 +49,25 @@ def getMiniBatchByLabel(dataByLabel, size, rng, shuffle=True):
         rng.shuffle(miniBatch)
     return miniBatch
 
+def linearGenerator(startingValue, slope):
+    value = startingValue
+    while True:
+        yield value
+        value += slope
+
+def exponentialGenerator(startingValue, base, decayRate):
+    value = startingValue
+    baseToTheDecayRate = base ** decayRate
+    while True:
+        yield value
+        value *= baseToTheDecayRate
+
+def powerLawGenerator(startingValue, exponent):
+    t = 1
+    while True:
+        yield startingValue * t ** exponent
+        t += 1
+
 def plotMNIST(image, mnistRows=28, mnistColumns=28):
     diagnostics.plotImage(rows=mnistRows,
                           columns=mnistColumns)
@@ -83,7 +102,7 @@ def main():
     sigma = 2. / np.sqrt(numberVisibleUnits + numberHiddenUnits)
     #gradientWalker = 'sgd'
     gradientWalker = 'adam'
-    iterations, miniBatchSize = int(5e6), 10
+    iterations, miniBatchSize = int(6e5), 10
     internalRngSeed, externalRngSeed = 1337, 1234
     rng = RandomState(seed=externalRngSeed)
     plotNumber, plotStride = 5, 1
@@ -92,7 +111,8 @@ def main():
     #l1Coefficient = 1e-5
     l1Coefficient = None
     l2Coefficient = 1e-4
-    parameterFileNameIn, parameterFileNameOut = f'mnistRBM-{gradientWalker}-1000000step.para', f'mnistRBM-{gradientWalker}-{iterations+1000000}step.para'
+    parameterFileNameIn, parameterFileNameOut = None, f'mnistRBM-{gradientWalker}-{iterations}step.para'
+    #parameterFileNameIn, parameterFileNameOut = f'mnistRBM-{gradientWalker}-1000000step.para', f'mnistRBM-{gradientWalker}-{iterations+1000000}step.para'
     runTraining = True
     verbose = False
     mnistReconProbPlotFilePrefix = f'mnistReconProb-{gradientWalker}-{iterations}steps-'
@@ -107,7 +127,8 @@ def main():
     if gradientWalker == 'sgd':
         learningRate = 1e-4
     elif gradientWalker == 'adam':
-        learningRate = 1e-4
+        #learningRate = 1e-4
+        learningRate = powerLawGenerator(1e-2, -0.1)
         adams = dict(zip(['visible', 'hidden', 'weights'],
                          [Adam(stepSize=learningRate) for _ in range(3)]))
     else:
@@ -168,8 +189,6 @@ def main():
     historicalRBMs = []
     hiddenUnitActivations = []
     historicalFEs = []
-    trainSamplesForFE = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize*10, rng)
-    testSamplesForFE = getMiniBatchByLabel(testImagesByLabel, miniBatchSize*10, rng)
     setupEndTime = time.time()
 
     if runTraining is True:
@@ -188,9 +207,8 @@ def main():
                     xs, ys, _ = diagnostics.computeHistogramArray(gradientParameterTypes[parameterType].flatten())
                     gradientHistogramsByParameterType[parameterType].append((i, xs, ys))
                 historicalRBMs.append((i, rbm.copy()))
-                hiddenUnitActivations.append((i,
-                    rbm.storeHiddenActivationsOnMiniBatch(miniBatch,
-                                                          hiddenUnits=hiddenUnitActivationsSubset)))
+                hiddenUnitActivations.append((i, rbm.storeHiddenActivationsOnMiniBatch(miniBatch,
+                                                                    hiddenUnits=hiddenUnitActivationsSubset)))
                 historicalFEs.append((i,
                                       rbm.computeMeanFreeEnergy(trainSamplesForFE),
                                       rbm.computeMeanFreeEnergy(testSamplesForFE)))
@@ -275,6 +293,8 @@ def main():
                                                      fileName=hiddenUnitActivationFileName)
 
     #plot FE vs time
+    trainSamplesForFE = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize*10, rng)
+    testSamplesForFE = getMiniBatchByLabel(testImagesByLabel, miniBatchSize*10, rng)
     t = [fe[0] for fe in historicalFEs]
     trainFE = [fe[1] for fe in historicalFEs]
     testFE = [fe[2] for fe in historicalFEs]
