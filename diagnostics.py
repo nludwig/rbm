@@ -54,7 +54,7 @@ def outputPlot(fileName=None):
         plt.show()
     else:
         plt.savefig(fileName)
-    plt.clf()
+    plt.close()
 
 
 #

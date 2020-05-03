@@ -136,15 +136,21 @@ class RestrictedBoltzmannMachine:
         self.visibleLayer = miniFantasyBatch
         for _ in range(nCDSteps):
             visibleOut, hiddenOut = self.gibbsSample()
+        visibleModelMean, hiddenModelMean, weightModelMean = \
+                self.computeParameterMeans(visibleOut, hiddenOut)
         #store for possible use by adversary
-        self.visibleModelMean, self.hiddenModelMean, self.weightModelMean = \
-                                self.computeParameterMeans(visibleOut, hiddenOut)
-        return self.visibleModelMean, self.hiddenModelMean, self.weightModelMean, visibleOut
+        self.visibleModel = visibleOut
+        self.hiddenModel = hiddenOut
+        self.visibleModelMean = visibleModelMean
+        self.hiddenModelMean = hiddenModelMean
+        self.weightModelMean = weightModelMean
+        return visibleModelMean, hiddenModelMean, weightModelMean, visibleOut
 
     def computeParameterMeans(self, visible, hidden):
         visibleMean = visible.mean(axis=0)
         hiddenMean = hidden.mean(axis=0)
-        weightMean = visibleMean[..., :, None] * hiddenMean[..., None, :] * visible.shape[0]
+        weightMean = (visible[..., :, None] * hidden[..., None, :]).mean(axis=0)
+        #weightMean = visibleMean[..., :, None] * hiddenMean[..., None, :] * visible.shape[0]
         return visibleMean, hiddenMean, weightMean
 
     def updateParameters(self):
@@ -195,7 +201,6 @@ class RestrictedBoltzmannMachine:
         visibleGradient, hiddenGradient, weightGradient, newFantasy = \
             self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps,
                                     l1Coefficient=l1Coefficient, l2Coefficient=l2Coefficient)
-
         #hack to stop changing the *Step pointer; req'd for
         # current implementation of histograms of *Steps
         self.visibleStep += adams['visible'].computeAdamStep(visibleGradient) - self.visibleStep
@@ -212,6 +217,16 @@ class RestrictedBoltzmannMachine:
                                           self.weightStep.mean()))
         return newFantasy
 
+    def computeAdversaryGradient(self, adversary):
+        adversaryPredictions = adversary.predict(miniFantasyBatch)
+        adversaryPredictionVariation = adversaryPredictions - adversaryPredictions.mean()
+        visibleModelVariation = self.visibleModel - self.visibleModelMean
+        hiddenModelVariation = self.hiddenModel - self.hiddenModelMean
+        weightModelVariation = self.visibleModel[..., :, None] * self.hiddenModel[..., None, :] - self.weightModelMean
+        visibleGradient = (adversaryPredictionVariation[:, None] * visibleModelVariation).mean(axis=0)
+        hiddenGradient = (adversaryPredictionVariation[:, None] * hiddenModelVariation).mean(axis=0)
+        weightGradient = (adversaryPredictionVariation[:, None, None] * weightModelVariation).mean(axis=0)
+        return visibleGradient, hiddenGradient, weightGradient
 
     #
     #analysis methods

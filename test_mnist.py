@@ -128,7 +128,8 @@ def main():
         learningRate = 1e-4
     elif gradientWalker == 'adam':
         #learningRate = 1e-4
-        learningRate = powerLawGenerator(1e-2, -0.1)
+        #learningRate = powerLawGenerator(1e-2, -0.1)
+        learningRate = powerLawGenerator(1e-3, -0.1)
         adams = dict(zip(['visible', 'hidden', 'weights'],
                          [Adam(stepSize=learningRate) for _ in range(3)]))
     else:
@@ -189,6 +190,8 @@ def main():
     historicalRBMs = []
     hiddenUnitActivations = []
     historicalFEs = []
+    trainSamplesForFE = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize*10, rng)
+    testSamplesForFE = getMiniBatchByLabel(testImagesByLabel, miniBatchSize*10, rng)
     setupEndTime = time.time()
 
     if runTraining is True:
@@ -224,20 +227,18 @@ def main():
 
     outputStartTime = time.time()
     #plot reconstruction series
-    reconstructionPlots = []
-    reconstructionProbPlots = []
     visibleStarts = getMiniBatchByLabel(testImagesByLabel, 10, rng)
-    reconstructionPlots.append([visible] for visible in visibleStarts)
-    reconstructionProbPlots.append([visible] for visible in visibleStarts)
+    reconstructionPlots = [[visible] for visible in visibleStarts]
+    reconstructionProbPlots = [[visible] for visible in visibleStarts]
     for i, visible in enumerate(visibleStarts):
         rbm.visibleLayer = visible
         for _ in range(plotNumber-1):
             for _ in range(plotStride):
                 visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
-            reconstructionProbPlots.append(visible)
-            reconstructionPlots.append(rbm.rollBernoulliProbabilities(visible))
-        plotMNISTSeries(reconstructionProbPlots, fileName=''.join((mnistReconProbPlotFilePrefix, f'{i}.pdf')))
-        plotMNISTSeries(reconstructionPlots, fileName=''.join((mnistReconPlotFilePrefix, f'{i}.pdf')))
+            reconstructionProbPlots[i].append(visible)
+            reconstructionPlots[i].append(rbm.rollBernoulliProbabilities(visible))
+        plotMNISTSeries(reconstructionProbPlots[i], fileName=''.join((mnistReconProbPlotFilePrefix, f'{i}.pdf')))
+        plotMNISTSeries(reconstructionPlots[i], fileName=''.join((mnistReconPlotFilePrefix, f'{i}.pdf')))
 
     #plot parameter histograms
     print('#step\tparaLo\tparaHi\tgradLo\tgradHi\tratioLo\tratioHi')
@@ -248,18 +249,6 @@ def main():
             _, gradxs, gradys = gradientHistogramsByParameterType[parameterType][i]
             print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(gradxs.min(), gradxs.max(),
                                         gradxs.min()/xs.min(), gradxs.max()/xs.max()))
-
-            #parameterHistogramFileName = ''.join((parameterHistogramFilePrefix,
-            #                                      parameterType,
-            #                                      f'{step}.pdf'))
-            #diagnostics.plotHistogramArray(xs, ys, title=parameterType+f' {step}',
-            #                               fileName=parameterHistogramFileName)
-
-            #gradientHistogramFileName = ''.join((gradientHistogramFilePrefix,
-            #                                     parameterType,
-            #                                     f'{step}.pdf'))
-            #diagnostics.plotHistogramArray(gradxs, gradys, title=parameterType+f' grad {step}',
-            #                               fileName=gradientHistogramFileName)
 
         parameterHistogramTSFileName = ''.join((parameterHistogramFilePrefix,
                                                 parameterType,
@@ -293,11 +282,9 @@ def main():
                                                      fileName=hiddenUnitActivationFileName)
 
     #plot FE vs time
-    trainSamplesForFE = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize*10, rng)
-    testSamplesForFE = getMiniBatchByLabel(testImagesByLabel, miniBatchSize*10, rng)
     t = [fe[0] for fe in historicalFEs]
-    trainFE = [fe[1] for fe in historicalFEs]
-    testFE = [fe[2] for fe in historicalFEs]
+    trainFE = np.array([fe[1] for fe in historicalFEs])
+    testFE = np.array([fe[2] for fe in historicalFEs])
     diagnostics.plotTrainingTestAverageFEVsTime(t, trainFE, testFE, fileName=feFileName)
     diagnostics.plotTrainingTestAverageFEVsTime(t, trainFE/testFE, None, fileName=feRatioFileName)
 
