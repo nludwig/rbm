@@ -84,6 +84,41 @@ def plotReceptiveFields(rbm, hiddenUnitIndices, fileName=None):
                                        vmax=rbm.weights[:, hiddenUnitIndices].max())
     plotMNISTSeries(rbm.weights[:, hiddenUnitIndices].T, norm=norm, fileName=fileName)
 
+def plotReconstructionSeries(visibleStarts, rbm, probPlotFilePrefix, bernoulliPlotFilePrefix):
+    reconstructionPlots = [[visible] for visible in visibleStarts]
+    reconstructionProbPlots = [[visible] for visible in visibleStarts]
+    for i, visible in enumerate(visibleStarts):
+        rbm.visibleLayer = visible
+        for _ in range(plotNumber-1):
+            for _ in range(plotStride):
+                visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
+            reconstructionProbPlots[i].append(visible)
+            reconstructionPlots[i].append(rbm.rollBernoulliProbabilities(visible))
+        plotMNISTSeries(reconstructionProbPlots[i], fileName=''.join((probPlotFilePrefix, f'{i}.pdf')))
+        plotMNISTSeries(reconstructionPlots[i], fileName=''.join((bernoulliPlotFilePrefix, f'{i}.pdf')))
+
+def plotParameterHistograms(weightHistogramsByParameterType, gradientHistogramsByParameterType, parameterHistogramFilePrefix, gradientHistogramFilePrefix):
+    print('#step\tparaLo\tparaHi\tgradLo\tgradHi\tratioLo\tratioHi')
+    for parameterType in weightHistogramsByParameterType:
+        print(parameterType)
+        for i, (step, xs, ys) in enumerate(weightHistogramsByParameterType[parameterType]):
+            print('{}\t{:.3f}\t{:.3f}'.format(step, xs.min(), xs.max()), end='\t')
+            _, gradxs, gradys = gradientHistogramsByParameterType[parameterType][i]
+            print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(gradxs.min(), gradxs.max(),
+                                        gradxs.min()/xs.min(), gradxs.max()/xs.max()))
+
+        parameterHistogramTSFileName = ''.join((parameterHistogramFilePrefix,
+                                                parameterType,
+                                                f'TimeSeries.pdf'))
+        diagnostics.plotHistogramArraySeries(
+            [weightHistogram[1] for weightHistogram in weightHistogramsByParameterType[parameterType]],
+            [weightHistogram[2] for weightHistogram in weightHistogramsByParameterType[parameterType]],
+            title=parameterType+' time series',
+            fileName=parameterHistogramTSFileName)
+        gradientHistogramTSFileName = ''.join((gradientHistogramFilePrefix,
+                                               parameterType,
+                                               f'TimeSeries.pdf'))
+
 def main():
     setupStartTime = time.time()
     #load data
@@ -232,7 +267,6 @@ def main():
                 historicalFEs.append((i,
                                       rbm.computeMeanFreeEnergy(trainSamplesForFE),
                                       rbm.computeMeanFreeEnergy(testSamplesForFE)))
-
         loopEndTime = time.time()
 
         if parameterFileNameOut is not None:
@@ -243,17 +277,7 @@ def main():
 
     #plot reconstruction series
     visibleStarts = getMiniBatchByLabel(testImagesByLabel, 10, rng)
-    reconstructionPlots = [[visible] for visible in visibleStarts]
-    reconstructionProbPlots = [[visible] for visible in visibleStarts]
-    for i, visible in enumerate(visibleStarts):
-        rbm.visibleLayer = visible
-        for _ in range(plotNumber-1):
-            for _ in range(plotStride):
-                visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
-            reconstructionProbPlots[i].append(visible)
-            reconstructionPlots[i].append(rbm.rollBernoulliProbabilities(visible))
-        plotMNISTSeries(reconstructionProbPlots[i], fileName=''.join((mnistReconProbPlotFilePrefix, f'{i}.pdf')))
-        plotMNISTSeries(reconstructionPlots[i], fileName=''.join((mnistReconPlotFilePrefix, f'{i}.pdf')))
+    plotReconstructionSeries(visibleStarts, rbm, mnistReconProbPlotFilePrefix, mnistReconPlotFilePrefix)
 
     #plot fantasy particle series
     visibleStarts = miniFantasyBatch
@@ -261,44 +285,10 @@ def main():
         rbm.visibleLayer = visible
         for _ in range(equilibrateFantasyForOutput):
             visibleStarts[i], _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
-    reconstructionPlots = [[visible] for visible in visibleStarts]
-    reconstructionProbPlots = [[visible] for visible in visibleStarts]
-    for i, visible in enumerate(visibleStarts):
-        rbm.visibleLayer = visible
-        for _ in range(plotNumber-1):
-            for _ in range(plotStride):
-                visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
-            reconstructionProbPlots[i].append(visible)
-            reconstructionPlots[i].append(rbm.rollBernoulliProbabilities(visible))
-        plotMNISTSeries(reconstructionProbPlots[i], fileName=''.join((mnistReconProbPlotFilePrefix, f'fantasy{i}.pdf')))
-        plotMNISTSeries(reconstructionPlots[i], fileName=''.join((mnistReconPlotFilePrefix, f'fantasy{i}.pdf')))
+    plotReconstructionSeries(visibleStarts, rbm, mnistReconProbPlotFilePrefix+'fantasy', mnistReconPlotFilePrefix+'fantasy')
 
     #plot parameter histograms
-    print('#step\tparaLo\tparaHi\tgradLo\tgradHi\tratioLo\tratioHi')
-    for parameterType in weightHistogramsByParameterType:
-        print(parameterType)
-        for i, (step, xs, ys) in enumerate(weightHistogramsByParameterType[parameterType]):
-            print('{}\t{:.3f}\t{:.3f}'.format(step, xs.min(), xs.max()), end='\t')
-            _, gradxs, gradys = gradientHistogramsByParameterType[parameterType][i]
-            print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(gradxs.min(), gradxs.max(),
-                                        gradxs.min()/xs.min(), gradxs.max()/xs.max()))
-
-        parameterHistogramTSFileName = ''.join((parameterHistogramFilePrefix,
-                                                parameterType,
-                                                f'TimeSeries.pdf'))
-        diagnostics.plotHistogramArraySeries(
-            [weightHistogram[1] for weightHistogram in weightHistogramsByParameterType[parameterType]],
-            [weightHistogram[2] for weightHistogram in weightHistogramsByParameterType[parameterType]],
-            title=parameterType+' time series',
-            fileName=parameterHistogramTSFileName)
-        gradientHistogramTSFileName = ''.join((gradientHistogramFilePrefix,
-                                               parameterType,
-                                               f'TimeSeries.pdf'))
-        diagnostics.plotHistogramArraySeries(
-            [gradientHistogram[1] for gradientHistogram in gradientHistogramsByParameterType[parameterType]],
-            [gradientHistogram[2] for gradientHistogram in gradientHistogramsByParameterType[parameterType]],
-            title=parameterType+' grad time series',
-            fileName=gradientHistogramTSFileName)
+    plotParameterHistograms(weightHistogramsByParameterType, gradientHistogramsByParameterType, parameterHistogramFilePrefix, gradientHistogramFilePrefix)
 
     #plot receptive fields
     hiddenUnitIndices = rng.randint(rbm.hiddenBias.shape[0], size=numReceptiveFields)
