@@ -108,25 +108,29 @@ def main():
     plotNumber, plotStride = 5, 1
     trainingReconstructionErrorOutputStride = 10
     trainingOutputStride = iterations // 5
+    equilibrateFantasyForOutput = 100
     #l1Coefficient = 1e-5
     l1Coefficient = None
     l2Coefficient = 1e-4
-    parameterFileNameIn, parameterFileNameOut = None, f'mnistRBM-{gradientWalker}-{iterations}step.para'
+    gamma = 0.1
+    adversary = 
+    fileMidfix = f'{gradientWalker}-{iterations}'
+    parameterFileNameIn, parameterFileNameOut = None, ''.join(('mnistRBM-', fileMidfix, 'step.para'))
     #parameterFileNameIn, parameterFileNameOut = f'mnistRBM-{gradientWalker}-1000000step.para', f'mnistRBM-{gradientWalker}-{iterations+1000000}step.para'
     runTraining = True
     verbose = False
-    mnistReconProbPlotFilePrefix = f'mnistReconProb-{gradientWalker}-{iterations}steps-'
-    mnistReconPlotFilePrefix = f'mnistRecon-{gradientWalker}-{iterations}steps-'
-    parameterHistogramFilePrefix = f'paraHistogram-{gradientWalker}-{iterations}steps-'
-    gradientHistogramFilePrefix = f'gradHistogram-{gradientWalker}-{iterations}steps-'
-    numReceptiveFields, receptiveFieldFilePrefix = 9, f'receptiveField-{gradientWalker}-{iterations}steps-'
+    mnistReconProbPlotFilePrefix = ''.join(('mnistReconProb-', fileMidfix, 'steps-'))
+    mnistReconPlotFilePrefix = ''.join(('mnistRecon-', fileMidfix, 'steps-'))
+    parameterHistogramFilePrefix = ''.join(('paraHistogram-', fileMidfix, 'steps-'))
+    gradientHistogramFilePrefix = ''.join(('gradHistogram-', fileMidfix, 'steps-'))
+    numReceptiveFields, receptiveFieldFilePrefix = 9, ''.join(('receptiveField-', fileMidfix, 'steps-'))
     hiddenUnitActivationsSubset = rng.randint(numberHiddenUnits, size=numberHiddenUnits//10)
-    hiddenUnitActivationFilePrefix = f'hiddenUnitActivation-{gradientWalker}-{iterations}steps-'
-    feFileName = f'fe-{gradientWalker}-{iterations}steps.pdf'
-    feRatioFileName = f'feRatio-{gradientWalker}-{iterations}steps.pdf'
+    hiddenUnitActivationFilePrefix = ''.join(('hiddenUnitActivation-', fileMidfix, 'steps-'))
+    feFileName = ''.join(('fe-', fileMidfix, 'steps-'))
+    feRatioFileName = ''.join(('feRatio-', fileMidfix, 'steps-'))
     if gradientWalker == 'sgd':
         learningRate = 1e-4
-    elif gradientWalker == 'adam':
+    elif gradientWalker == 'adam' or gradientWalker == 'adamAdversarial':
         #learningRate = 1e-4
         #learningRate = powerLawGenerator(1e-2, -0.1)
         learningRate = powerLawGenerator(1e-3, -0.1)
@@ -171,6 +175,18 @@ def main():
                                                                l1Coefficient=l1Coefficient,
                                                                l2Coefficient=l2Coefficient,
                                                                verbose=verbose)
+    elif gradientWalker == 'adamAdversarial':
+        updateParameters = lambda miniBatch, \
+                                  miniFantasyBatch: \
+                                      rbm.updateParametersAdamAdversarial(miniBatch,
+                                                                          miniFantasyBatch,
+                                                                          adams,
+                                                                          gamma,
+                                                                          adversary,
+                                                                          nCDSteps=nCDSteps,
+                                                                          l1Coefficient=l1Coefficient,
+                                                                          l2Coefficient=l2Coefficient,
+                                                                          verbose=verbose)
     else:
         exit(1)
 
@@ -192,6 +208,7 @@ def main():
     historicalFEs = []
     trainSamplesForFE = getMiniBatchByLabel(trainImagesByLabel, miniBatchSize*10, rng)
     testSamplesForFE = getMiniBatchByLabel(testImagesByLabel, miniBatchSize*10, rng)
+
     setupEndTime = time.time()
 
     if runTraining is True:
@@ -216,9 +233,6 @@ def main():
                                       rbm.computeMeanFreeEnergy(trainSamplesForFE),
                                       rbm.computeMeanFreeEnergy(testSamplesForFE)))
 
-
-        rbm.hiddenConditionalProbabilities()
-
         loopEndTime = time.time()
 
         if parameterFileNameOut is not None:
@@ -226,6 +240,7 @@ def main():
                 rbm.dumpParameterFile(parameterFile)
 
     outputStartTime = time.time()
+
     #plot reconstruction series
     visibleStarts = getMiniBatchByLabel(testImagesByLabel, 10, rng)
     reconstructionPlots = [[visible] for visible in visibleStarts]
@@ -239,6 +254,24 @@ def main():
             reconstructionPlots[i].append(rbm.rollBernoulliProbabilities(visible))
         plotMNISTSeries(reconstructionProbPlots[i], fileName=''.join((mnistReconProbPlotFilePrefix, f'{i}.pdf')))
         plotMNISTSeries(reconstructionPlots[i], fileName=''.join((mnistReconPlotFilePrefix, f'{i}.pdf')))
+
+    #plot fantasy particle series
+    visibleStarts = miniFantasyBatch
+    for i, visible in enumerate(visibleStarts):
+        rbm.visibleLayer = visible
+        for _ in range(equilibrateFantasyForOutput):
+            visibleStarts[i], _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
+    reconstructionPlots = [[visible] for visible in visibleStarts]
+    reconstructionProbPlots = [[visible] for visible in visibleStarts]
+    for i, visible in enumerate(visibleStarts):
+        rbm.visibleLayer = visible
+        for _ in range(plotNumber-1):
+            for _ in range(plotStride):
+                visible, _ = rbm.gibbsSample(hiddenUnitsStochastic=False)
+            reconstructionProbPlots[i].append(visible)
+            reconstructionPlots[i].append(rbm.rollBernoulliProbabilities(visible))
+        plotMNISTSeries(reconstructionProbPlots[i], fileName=''.join((mnistReconProbPlotFilePrefix, f'fantasy{i}.pdf')))
+        plotMNISTSeries(reconstructionPlots[i], fileName=''.join((mnistReconPlotFilePrefix, f'fantasy{i}.pdf')))
 
     #plot parameter histograms
     print('#step\tparaLo\tparaHi\tgradLo\tgradHi\tratioLo\tratioHi')
@@ -266,7 +299,7 @@ def main():
             [gradientHistogram[2] for gradientHistogram in gradientHistogramsByParameterType[parameterType]],
             title=parameterType+' grad time series',
             fileName=gradientHistogramTSFileName)
-    
+
     #plot receptive fields
     hiddenUnitIndices = rng.randint(rbm.hiddenBias.shape[0], size=numReceptiveFields)
     for i, historicalRBM in historicalRBMs:
@@ -289,6 +322,7 @@ def main():
     diagnostics.plotTrainingTestAverageFEVsTime(t, trainFE/testFE, None, fileName=feRatioFileName)
 
     outputEndTime = time.time()
+
     print(f'setup time {setupEndTime-setupStartTime}s')
     if runTraining is True:
         print(f'training loop time {loopEndTime-loopStartTime}s')

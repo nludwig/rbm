@@ -201,11 +201,12 @@ class RestrictedBoltzmannMachine:
         visibleGradient, hiddenGradient, weightGradient, newFantasy = \
             self.computePCDGradient(miniBatch, miniFantasyBatch, nCDSteps=nCDSteps,
                                     l1Coefficient=l1Coefficient, l2Coefficient=l2Coefficient)
+        visisbleGradientAd, hiddenGradientAd, weightGradientAd = self.computeAdversaryGradient(adversary)
         #hack to stop changing the *Step pointer; req'd for
         # current implementation of histograms of *Steps
-        self.visibleStep += adams['visible'].computeAdamStep(visibleGradient) - self.visibleStep
-        self.hiddenStep += adams['hidden'].computeAdamStep(hiddenGradient) - self.hiddenStep
-        self.weightStep += adams['weights'].computeAdamStep(weightGradient) - self.weightStep
+        self.visibleStep += adams['visible'].computeAdamStep(visibleGradient + visibleGradientAd) - self.visibleStep
+        self.hiddenStep += adams['hidden'].computeAdamStep(hiddenGradient + hiddenGradientAd) - self.hiddenStep
+        self.weightStep += adams['weights'].computeAdamStep(weightGradient + weightGradientAd) - self.weightStep
         self.updateParameters()
         if verbose is True:
             print('{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(
@@ -227,6 +228,7 @@ class RestrictedBoltzmannMachine:
         hiddenGradient = (adversaryPredictionVariation[:, None] * hiddenModelVariation).mean(axis=0)
         weightGradient = (adversaryPredictionVariation[:, None, None] * weightModelVariation).mean(axis=0)
         return visibleGradient, hiddenGradient, weightGradient
+
 
     #
     #analysis methods

@@ -14,10 +14,6 @@ class LinearClassifier:
         linearLabels = self.predictLinearProbabilities(data)
         gradient = ((linearLabels - labels) * linearLabels * (1. - linearLabels)) @ data
         return gradient
-        #if len(data.shape) == 1:
-        #    return gradient
-        #else:
-        #    return gradient / data.shape[0]
     
     def updateParameters(self, data, labels):
         gradient = self.computeGradientInProbabilities(data, labels)
